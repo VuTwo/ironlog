@@ -1,0 +1,8 @@
+# build output (regenerate with scripts/build-single.mjs)
+dist/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+node_modules/
