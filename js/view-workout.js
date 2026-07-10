@@ -24,6 +24,7 @@
           <h1>${greet}</h1>
           <p class="muted">${U.fmtDateLong(U.todayKey())}</p>
         </div>
+        <div id="program-section"></div>
         <div class="stat-row">
           <div class="stat-tile"><div class="stat-value">${week.count}</div><div class="stat-label">workouts this week</div></div>
           <div class="stat-tile"><div class="stat-value">${week.sets}</div><div class="stat-label">sets this week</div></div>
@@ -34,6 +35,8 @@
         <div id="template-list"></div>
         ${last ? `<div class="section-head"><h2>Last workout</h2></div><div id="last-workout"></div>` : ''}
       </div>`;
+
+    if (FT.renderProgramSection) FT.renderProgramSection(root.querySelector('#program-section'));
 
     root.querySelector('#start-empty').addEventListener('click', () => {
       S.startWorkout(null);
@@ -204,9 +207,11 @@
         return;
       }
       const templateId = w.templateId;
+      const prog = w.program;
       const finished = S.finishWorkout();
       UI.stopRestTimer();
       if (finished) {
+        if (prog) S.markDayComplete(prog.week, prog.dayKey, finished.id);
         if (templateId) {
           // keep routine in sync with what was actually performed
           const t = S.templates.find((x) => x.id === templateId);
@@ -239,6 +244,14 @@
       const last = lastSetsFor(en.exerciseId, w);
       const card = document.createElement('div');
       card.className = 'card ex-card';
+      const tg = en.target;
+      const targetHtml = tg
+        ? `<div class="ex-target${tg.main ? ' is-main' : ''}">
+             <div class="ex-target-line"><span class="ex-target-badge">TARGET</span><span>${U.esc(tg.line)}</span>${tg.rest ? `<span class="muted small ex-target-rest">rest ${U.esc(tg.rest)}</span>` : ''}</div>
+             ${tg.superset ? `<div class="ex-super muted small">⛓ Superset: ${U.esc(tg.superset)}</div>` : ''}
+             ${tg.cue ? `<button class="ex-cue-toggle" aria-expanded="false">💡 Coaching cue</button><div class="ex-cue" hidden>${U.esc(tg.cue)}</div>` : ''}
+           </div>`
+        : '';
       card.innerHTML = `
         <div class="ex-card-head">
           <div>
@@ -247,6 +260,7 @@
           </div>
           <button class="icon-btn ex-menu">⋯</button>
         </div>
+        ${targetHtml}
         <input class="ex-note" placeholder="Notes (cues, seat height…)" value="${U.esc(en.notes || '')}">
         <div class="set-grid">
           <div class="set-grid-head"><span>SET</span><span>PREV</span><span>${unit.toUpperCase()}</span><span>REPS</span><span>RPE</span><span>✓</span></div>
@@ -256,6 +270,13 @@
       const rowsEl = card.querySelector('.set-rows');
       en.sets.forEach((set, si) => rowsEl.appendChild(setRow(w, en, ei, set, si, last, unit, card)));
 
+      const cueToggle = card.querySelector('.ex-cue-toggle');
+      if (cueToggle) cueToggle.addEventListener('click', () => {
+        const cue = card.querySelector('.ex-cue');
+        const open = cue.hidden;
+        cue.hidden = !open;
+        cueToggle.setAttribute('aria-expanded', String(open));
+      });
       card.querySelector('.ex-note').addEventListener('change', (e) => { en.notes = e.target.value; S.save('activeWorkout'); });
       card.querySelector('.add-set').addEventListener('click', () => {
         const prev = en.sets[en.sets.length - 1];

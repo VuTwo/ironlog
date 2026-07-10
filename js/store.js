@@ -24,15 +24,24 @@
     nutrition: {},       // dateKey -> {entries:[{id,name,kcal,protein,carbs,fat}]}
     foods: [],
     activeWorkout: null, // in-progress workout or null
+    program: {           // FORGED guided program state
+      active: false,
+      oneRM: { squat: null, bench: null, deadlift: null }, // canonical kg
+      startedAt: null,
+      viewWeek: null,    // week the dashboard/screen is showing (null = auto-current)
+      completed: {},     // 'w{n}{dayKey}' -> {workoutId, date}
+      log: {},           // week(number) -> {bodyweightKg, squat, bench, deadlift, sleep, pump, notes}
+    },
     loaded: false,
   });
 
-  const KEYS = ['settings', 'exercises', 'workouts', 'templates', 'bodyLog', 'nutrition', 'foods', 'activeWorkout'];
+  const KEYS = ['settings', 'exercises', 'workouts', 'templates', 'bodyLog', 'nutrition', 'foods', 'activeWorkout', 'program'];
 
   S.load = async function () {
     const vals = await Promise.all(KEYS.map((k) => FT.db.get(k)));
     KEYS.forEach((k, i) => { if (vals[i] !== undefined && vals[i] !== null) S[k] = vals[i]; });
     S.settings = { ...DEFAULT_SETTINGS, ...S.settings, macroTargets: { ...DEFAULT_SETTINGS.macroTargets, ...(S.settings.macroTargets || {}) }, fitbit: { ...DEFAULT_SETTINGS.fitbit, ...(S.settings.fitbit || {}) } };
+    S.program = { active: false, oneRM: { squat: null, bench: null, deadlift: null }, startedAt: null, viewWeek: null, completed: {}, log: {}, ...S.program };
     if (!S.exercises.length) S.exercises = FT.seedExercises();
     if (!S.foods.length) S.foods = FT.seedFoods();
     S.loaded = true;
@@ -107,6 +116,91 @@
   };
 
   S.deleteTemplate = (id) => { S.templates = S.templates.filter((t) => t.id !== id); S.save('templates'); };
+
+  // ---------- FORGED program ----------
+  S.startProgram = () => {
+    const P = FT.program, def = FT.PROGRAM.defaultMaxesLb;
+    P.ensureExercises();
+    if (!S.program.oneRM.squat) {
+      S.program.oneRM = {
+        squat: U.toKg(def.squat, 'lb'),
+        bench: U.toKg(def.bench, 'lb'),
+        deadlift: U.toKg(def.deadlift, 'lb'),
+      };
+    }
+    S.program.active = true;
+    S.program.startedAt = S.program.startedAt || U.todayKey();
+    S.save('program', 'exercises');
+  };
+
+  S.setProgramMax = (liftKey, kg) => {
+    S.program.oneRM[liftKey] = kg;
+    S.save('program');
+  };
+
+  S.markDayComplete = (week, dayKey, workoutId) => {
+    S.program.completed[`w${week}${dayKey}`] = { workoutId, date: U.todayKey() };
+    S.save('program');
+  };
+  S.clearDayComplete = (week, dayKey) => {
+    delete S.program.completed[`w${week}${dayKey}`];
+    S.save('program');
+  };
+
+  S.saveProgramLog = (week, fields) => {
+    S.program.log[week] = { ...(S.program.log[week] || {}), ...fields };
+    S.save('program');
+  };
+
+  // Build & start an in-progress workout for a given program week + day.
+  S.startProgramDay = (week, dayKey) => {
+    const P = FT.program;
+    const d = P.day(week, dayKey);
+    const oneRM = S.program.oneRM;
+    const mkSets = (n, weightKg, reps) =>
+      Array.from({ length: n }, () => ({ weightKg: weightKg, reps: reps, rpe: null, type: 'normal', done: false }));
+    const entries = [];
+    for (const it of d.items) {
+      if (it.t === 'ss') {
+        const cue = P.cue(it.cue);
+        [[it.a, it.b], [it.b, it.a]].forEach(([name, other]) => {
+          entries.push({
+            exerciseId: P.resolveExercise(name),
+            notes: '',
+            sets: mkSets(it.sets, null, null),
+            target: { main: false, superset: it.a + ' + ' + it.b, line: P.targetLine(it), rest: it.rest, cue },
+          });
+        });
+      } else if (it.t === 'main') {
+        const w = P.targetWeightKg(oneRM[it.lift], it.pct);
+        entries.push({
+          exerciseId: P.resolveExercise(it.ex),
+          notes: '',
+          sets: mkSets(it.sets, w, P.firstRep(it.reps)),
+          target: { main: true, line: P.targetLine(it), rest: it.rest, cue: P.cue(it.cue), pct: it.pct, weightKg: w },
+        });
+      } else {
+        entries.push({
+          exerciseId: P.resolveExercise(it.ex),
+          notes: '',
+          sets: mkSets(it.sets, null, null),
+          target: { main: false, line: P.targetLine(it), rest: it.rest, cue: P.cue(it.cue) },
+        });
+      }
+    }
+    const short = (d.title.split(':')[0] || d.title).trim();
+    S.activeWorkout = {
+      id: 'w' + U.uid(),
+      date: U.todayKey(),
+      name: `FORGED W${week} — ${short}`,
+      startedAt: Date.now(),
+      notes: '',
+      program: { week, dayKey },
+      entries,
+    };
+    S.save('activeWorkout');
+    return S.activeWorkout;
+  };
 
   // ---------- derived stats ----------
   // Last performance of an exercise: {date, sets} from most recent finished workout containing it
